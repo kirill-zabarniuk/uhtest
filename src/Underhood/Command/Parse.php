@@ -12,15 +12,29 @@ use Symfony\Component\HttpClient\HttpClient;
 /**
  * Class DefaultCommand
  */
-class ParseAll extends Console\Command\Command
+class Parse extends Console\Command\Command
 {
+    /** @var string */
+    const ARGUMENT_NAME = 'search_text';
     /** @var int */
     const HTTP_CLIENT_LOGGER_VERBOSITY = Console\Output\OutputInterface::VERBOSITY_NORMAL; // Console\Output\OutputInterface::VERBOSITY_DEBUG;
 
-    /** @var string */
+    /** @var string todo: make as cli option */
     protected $initUrl = 'https://search.ipaustralia.gov.au/trademarks/search/advanced';
     /** @var BrowserKit\HttpBrowser */
     protected $browser = null;
+
+    /**
+     * {@inheritDoc}
+     */
+    protected function configure()
+    {
+        parent::configure();
+
+        $this
+            ->addArgument(self::ARGUMENT_NAME, Console\Input\InputArgument::REQUIRED|Console\Input\InputArgument::IS_ARRAY)
+        ;
+    }
 
     /**
      * @param bool $useShared
@@ -125,13 +139,14 @@ class ParseAll extends Console\Command\Command
     protected function execute(Console\Input\InputInterface $input, Console\Output\OutputInterface $output): ?int
     {
         $result = [];
-        $browser = $this->getBrowser();
+        $searchText = implode(' ', $input->getArgument(self::ARGUMENT_NAME));
 
         // request search page to have cookies and csrf field
+        $browser = $this->getBrowser();
         $searchPageCrawler = $browser->request('GET', $this->initUrl);
         // fill form fields
         $form = $searchPageCrawler->filter('#basicSearchForm')->form();
-        $form['wv[0]'] = 'abc';
+        $form['wv[0]'] = $searchText;
 
         // get 1st search results page
         $crawler = $browser->submit($form);
