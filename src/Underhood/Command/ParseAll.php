@@ -4,6 +4,7 @@ namespace Underhood\Command;
 
 use Psr\Log\LoggerAwareInterface;
 use Symfony\Component;
+use Symfony\Component\DomCrawler\Crawler;
 use Symfony\Component\BrowserKit;
 use Symfony\Component\Console;
 use Symfony\Component\HttpClient\HttpClient;
@@ -13,10 +14,11 @@ use Symfony\Component\HttpClient\HttpClient;
  */
 class ParseAll extends Console\Command\Command
 {
+    /** @var int */
+    const HTTP_CLIENT_LOGGER_VERBOSITY = Console\Output\OutputInterface::VERBOSITY_NORMAL; // Console\Output\OutputInterface::VERBOSITY_DEBUG;
+
     /** @var string */
     protected $initUrl = 'https://search.ipaustralia.gov.au/trademarks/search/advanced';
-    /** @var string */
-    protected $searchUrl = 'https://search.ipaustralia.gov.au/trademarks/search/doSearch';
     /** @var BrowserKit\HttpBrowser */
     protected $browser = null;
 
@@ -31,7 +33,7 @@ class ParseAll extends Console\Command\Command
             $client = HttpClient::create();
             if ($client instanceof LoggerAwareInterface) {
                 $client->setLogger(new Console\Logger\ConsoleLogger(
-                    new Console\Output\ConsoleOutput(Console\Output\OutputInterface::VERBOSITY_DEBUG)
+                    new Console\Output\ConsoleOutput(self::HTTP_CLIENT_LOGGER_VERBOSITY)
                 ));
             }
 
@@ -42,59 +44,105 @@ class ParseAll extends Console\Command\Command
     }
 
     /**
-     * @param BrowserKit\HttpBrowser $browser
-     * @param string|null            $url
+     * @param Crawler $crawler
+     * @param string  $selector
+     * @param mixed   $default
      *
-     * @return Component\DomCrawler\Crawler|null
+     * @return string
      */
-    protected function initBrowser(BrowserKit\HttpBrowser $browser, string $url = null): ?Component\DomCrawler\Crawler
+    protected function getNodeText(Crawler $crawler, string $selector, $default = null): ?string
     {
-        if (null === $url) {
-            $url = $this->initUrl;
+        $node = $crawler->filter($selector);
+        if (!$node->count()) {
+            return $default;
         }
 
-        return $browser->request('GET', $url);
+        return $node->text($default);
     }
 
     /**
-     * @param array  $body
-     * @param string $method
+     * @param Crawler $crawler
+     * @param string  $selector
+     * @param string  $attr
+     * @param mixed   $default
      *
-     * @return \Symfony\Contracts\HttpClient\ResponseInterface
-     * @throws \Symfony\Contracts\HttpClient\Exception\TransportExceptionInterface
+     * @return string
      */
-    protected function request(array $body = [], string $method = 'POST'): \Symfony\Contracts\HttpClient\ResponseInterface
+    protected function getNodeAttr(Crawler $crawler, string $selector, string $attr, $default = null): ?string
     {
-        $rq = HttpClient::create();
+        $node = $crawler->filter($selector);
 
-        return $rq->request($method, $this->searchUrl, [
-            'body' => $body,
-        ]);
+        return 1 == $node->count() ? $node->attr($attr) : $default;
+    }
+
+    /**
+     * @param Crawler $crawler
+     *
+     * @return array
+     */
+    protected function getTrParsedData(Crawler $crawler): array
+    {
+        return [
+            'number' => $this->getNodeText($crawler, 'td.number a'),
+            'url_logo' => $this->getNodeAttr($crawler, 'td.trademark.image img', 'src'),
+            'name' => $this->getNodeText($crawler, 'td.trademark.words'),
+            'class' => $this->getNodeText($crawler, 'td.classes'),
+            'status' => $this->getNodeText($crawler, 'td.status span') ?? $this->getNodeText($crawler, 'td.status'),
+            'url_details_page' => $this->getNodeAttr($crawler, 'td.number a', 'href'),
+        ];
+    }
+
+    /**
+     * @param Crawler $crawler
+     *
+     * @return array
+     */
+    protected function getPageParsedData(Crawler $crawler): array
+    {
+        return $crawler->filter('#resultsTable tbody tr')->each(function (Crawler $trCrawler, $i) {
+            return $this->getTrParsedData($trCrawler);
+        });
+    }
+
+    /**
+     * @param Crawler $crawler
+     *
+     * @return Crawler|null
+     */
+    protected function getNextResultsPage(Crawler $crawler): ?Crawler
+    {
+        $nextPageNodes = $crawler->filter('#pageContent div.pagination-buttons a.js-nav-next-page');
+        if (!$nextPageNodes->count()) {
+            return null;
+        }
+
+        return $this->getBrowser()->request('GET', $nextPageNodes->first()->link()->getUri());
     }
 
     /**
      * {@inheritDoc}
-     * @throws \Exception
      */
-    protected function execute(Console\Input\InputInterface $input, Console\Output\OutputInterface $output)
+    protected function execute(Console\Input\InputInterface $input, Console\Output\OutputInterface $output): ?int
     {
+        $result = [];
         $browser = $this->getBrowser();
-        $initCrawler = $this->initBrowser($browser);
-        $csrfNode = $initCrawler->filter('#basicSearchForm input[name="_csrf"]');
-        if (!$csrfNode->count()) {
-            throw new \Exception('csrf node not found');
+
+        // request search page to have cookies and csrf field
+        $searchPageCrawler = $browser->request('GET', $this->initUrl);
+        // fill form fields
+        $form = $searchPageCrawler->filter('#basicSearchForm')->form();
+        $form['wv[0]'] = 'abc';
+
+        // get 1st search results page
+        $crawler = $browser->submit($form);
+        $result = array_merge($result, $this->getPageParsedData($crawler));
+
+        // traverse pages
+        while ($crawler = $this->getNextResultsPage($crawler)) {
+            $result = array_merge($result, $this->getPageParsedData($crawler));
         }
-        $csrf = $csrfNode->attr('value');
 
-        $crawler = $browser->request('POST', $this->searchUrl, [
-            '_csrf' => $csrf,
-            'wv[0]' => 'abc',
-        ]);
-        var_dump($browser->getCookieJar()->allRawValues($this->searchUrl));
-
-        /** @var BrowserKit\Response $response */
-        $response = $browser->getResponse();
-        var_dump($response->getContent());
+        echo json_encode($result, JSON_UNESCAPED_SLASHES);
 
         return 0; // Command::SUCCESS;
     }

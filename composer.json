@@ -4,7 +4,8 @@
         "symfony/browser-kit": "^5",
         "symfony/http-client": "^5",
         "symfony/mime": "^5",
-        "symfony/css-selector": "^5"
+        "symfony/css-selector": "^5",
+        "ext-json": "*"
     },
     "autoload": {
         "psr-4": { "Underhood\\": "src/Underhood" }
