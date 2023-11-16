@@ -157,7 +157,7 @@ class Parse extends Console\Command\Command
             $result = array_merge($result, $this->getPageParsedData($crawler));
         }
 
-        echo json_encode($result, JSON_UNESCAPED_SLASHES);
+        echo json_encode($result, JSON_UNESCAPED_SLASHES|JSON_PRETTY_PRINT);
 
         return 0; // Command::SUCCESS;
     }
